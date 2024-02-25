@@ -1,0 +1,53 @@
+---
+title: "Plots"
+author: "Carlos Arbonés & Joel El Temible"
+date: "2023-05-01"
+output: html_document
+---
+
+### Bivariate plot
+
+```{r}
+
+bivariate_plot <- function(x,y)
+{
+df <- data.frame(m = m, v = v)
+
+ggplot(df, aes(x = m, y = v)) + 
+  geom_point(size = 3, color = "#1f77b4") +
+  geom_smooth(method = "lm", se = FALSE, color = "#ff7f0e") +
+  
+  labs(x = "Mean", y = "Variance") +
+  
+  theme_minimal() +
+  theme(plot.title = element_text(size = 18, face = "bold"),
+        axis.title = element_text(size = 14),
+        axis.text = element_text(size = 12))
+}
+```
+
+### Boxplot
+
+```{r}
+
+boxplot_ser <- function(ser)
+{
+df1 = data.frame(x = as.factor(floor(time(ser))), y = as.numeric(ser))
+
+ggplot(df1, aes(x = x, y = y)) +
+  geom_boxplot(fill = "#0072B2", color = "black", outlier.color = "black") +
+  scale_y_continuous(limits = c(min(df1$y), max(df1$y) * 1.1), expand = c(0, 0.05)) +
+  labs(x = "Year", y = "Exportations") +
+  theme_bw() +
+  theme(panel.border = element_rect(color = "black", fill = NA, size = 1),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_line(color = "black"),
+        axis.text = element_text(size = 8),
+        axis.title = element_text(size = 12, face = "bold"),
+        plot.title = element_text(size = 16, face = "bold", hjust = 0.5))
+}
+```
+
+
+

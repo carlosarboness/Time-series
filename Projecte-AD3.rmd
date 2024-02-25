@@ -1,0 +1,325 @@
+---
+title: "Projecte AD"
+output: html_document
+date: '2023-03-18'
+---
+
+```{r, warning=FALSE}
+library(ggplot2)
+library(ggfortify)
+library(forecast)
+library(plotly)
+library(TSstudio)
+library(zoo)
+library(xts)
+library(lubridate)
+library(magrittr)
+```
+
+## 1. Model identification
+
+```{r}
+setwd(getwd())
+ser=ts(read.table("export.dat")/1000,start=1999,freq=12)
+```
+
+```{r}
+#autoplot(ser) + ggtitle("Total exportations in Spain") + labs(x = "Time", y = "Milions of euros")
+ts_decompose(ser) 
+```
+```{r}
+autoplot(ser) +
+  labs(title = "Total Exportations in Spain", 
+       x = "Time", 
+       y = "Thousands Million Euros") +
+  theme(plot.title = element_text(color = "black", size = 18, face = "bold", hjust=0.5),
+        axis.title.x = element_text(color = "black", size = 14),
+        axis.title.y = element_text(color = "black", size = 14))
+
+```
+
+```{r}
+ts_seasonal(trser, type = "normal", title = "Seasonality")
+```
+
+```{r}
+library(forecast)
+forecast::Acf(d1d12trser)
+```
+
+
+```{r}
+ts_cor(ser, lag.max = 72)
+```
+
+```{r}
+ts.plot_ly(ser)
+```
+
+
+```{r}
+check_res(m1)
+```
+
+
+```{r}
+boxplot(ser~floor(time(ser)))
+```
+
+```{r}
+# create mean and variance vectors
+m <- apply(matrix(ser, nrow = 12, byrow = FALSE), 2, mean)
+v <- apply(matrix(ser, nrow = 12, byrow = FALSE), 2, var)
+
+# create data frame
+df <- data.frame(m = m, v = v)
+
+# create scatter plot with color mapped to variance
+ggplot(df, aes(x = m, y = v)) +
+  geom_point(color = "#2c3e50") +  # puntos del gráfico
+  labs(title = "Relación entre la media y la varianza",
+       x = "Mean",
+       y = "Variance") +  # etiquetas de los ejes y título
+  theme_classic()  # estilo del gráfico
+```
+
+
+```{r}
+lambda = BoxCox.lambda(ser, lower=-1, upper=2)
+trser = (ser^lambda - 1)/lambda
+  boxplot(trser~floor(time(trser)))
+# Discrete colors
+a + scale_fill_brewer(palette="Dark2") + theme_minimal()
+# create mean and variance vectors
+m <- apply(matrix(trser, nrow = 12, byrow = FALSE), 2, mean)
+v <- apply(matrix(trser, nrow = 12, byrow = FALSE), 2, var)
+
+# create data frame
+df <- data.frame(m = m, v = v)
+
+# create scatter plot with color mapped to variance
+ggplot(df, aes(x = m, y = v)) +
+  geom_point(color = "#2c3e50") +  # puntos del gráfico
+  labs(
+       x = "Mean",
+       y = "Variance") +  # etiquetas de los ejes y título
+  theme_classic()  # estilo del gráfico
+```
+
+```{r}
+plot(trser)
+```
+
+```{r}
+ggmonthplot(trser)
+```
+
+```{r}
+d12trser = diff(trser, 12)
+#ggmonthplot(d12trser)
+ts_seasonal(d12trser, type = "normal", title = "Seasonality")
+```
+
+```{r}
+ts_plot(d12trser,
+        title = "Total exportations in Spain transformed series",
+        Xtitle = "Time",
+        width = 3) %>%
+  layout(
+        xaxis = list(tickfont = list(size = 10)), 
+        yaxis = list(tickfont = list(size = 10)))
+         
+```
+
+```{r}
+d1d12trser = diff(d12trser)
+d1d1d12trser = diff(d1d12trser)
+ts_plot(d1d12trser,
+        title = "Total exportations in Spain transformed series",
+        Xtitle = "Time",
+        width = 3) %>%
+  layout(
+        xaxis = list(tickfont = list(size = 10)), 
+        yaxis = list(tickfont = list(size = 10)))
+```
+
+```{r}
+var(d12trser)
+var(d1d12trser)
+var(d1d1d12trser)
+```
+
+### Model proposal
+
+```{r}
+par(mfrow=c(1,2))
+acf(d1d12trser, yli=c(-1,1), lag.max=72, lwd=2, col=c(2, rep(1,11)))
+pacf(d1d12trser, yli=c(-1,1), lag.max=72, lwd=2, col=c(rep(1,11), 2))
+par(mfrow=c(1,1))
+```
+
+```{r}
+ts_cor(d1d12trser, lag.max = 72)
+
+```
+
+
+
+PARTE ESTACIONAL:
+MA(6) MA(2) AR(2)
+
+PARTE REGULAR:
+AR(2)
+
+m1: ARIMA(2,1,0)(0,1,6)
+m2: ARIMA(2,1,0)(0,1,2)
+m3: ARIMA(2,1,0)(2,1,0)
+
+#### auto.arima
+
+```{r}
+print_t_ratio <- function(m1) {
+  t_ratios <- round(m1$coef / sqrt(diag(m1$var.coef)), 2)
+  cat("\nT-ratios:", t_ratios)
+  
+  significant <- abs(t_ratios) > 2
+  cat("\nSignificant?:", significant)
+  
+  # Find parameter with lowest absolute T-ratio
+  abs_t_ratios <- abs(t_ratios)
+  if (any(abs_t_ratios < 2)) {
+    min_index <- which.min(abs_t_ratios)
+    if (abs_t_ratios[min_index] < 2) {
+      cat("\nParameter with lowest T-ratio:", t_ratios[which.min(abs_t_ratios)], 
+          " (index", min_index, ")")
+    }
+  } else {
+      cat("\nAll the parameters are significant")
+    }
+}
+```
+
+```{r}
+am1 = auto.arima(trser, max.p = 7, max.q = 7, max.P = 7, max.Q=7, ic="aic", d = 1, D = 1)
+am2 = auto.arima(trser, max.p = 7, max.q = 7, max.P = 7, max.Q=7, ic="aicc", d = 1, D = 1)
+am3 = auto.arima(trser, max.p = 7, max.q = 7, max.P = 7, max.Q=7, ic="bic", d = 1, D = 1)
+```
+```{r}
+am1
+am2
+am3
+```
+
+
+
+#### m1
+
+```{r}
+(m1 = arima(d1d12trser,order=c(2,0,0),
+           seasonal=list(order=c(0,0,6), period=12)))
+print_t_ratio(m1)
+```
+```{r}
+(m1 = arima(trser,order=c(2,1,0),
+           seasonal=list(order=c(0,1,6), period=12)))
+print_t_ratio(m1)
+```
+```{r, warning=FALSE}
+(m1 = arima(trser,order=c(2,1,0),
+           seasonal=list(order=c(0,1,6), period=12),
+           fixed=c(NA,NA,NA,NA,NA,NA,0,NA)))
+print_t_ratio(m1)
+```
+AIC improves => we keep this model
+
+#### m2
+
+```{r, warning=FALSE}
+(m2 = arima(d1d12trser,order=c(2,0,0),
+           seasonal=list(order=c(0,0,2), period=12)))
+print_t_ratio(m2)
+```
+```{r, warning=FALSE}
+(m2 = arima(trser,order=c(2,1,0),
+           seasonal=list(order=c(0,1,2), period=12)))
+print_t_ratio(m2)
+```
+All parameters are significant => we keep this model
+
+#### m3
+
+```{r}
+(m3 = arima(d1d12trser,order=c(2,0,0),
+           seasonal=list(order=c(2,0,0), period=12)))
+print_t_ratio(m3)
+```
+```{r}
+(m3 = arima(trser,order=c(2,1,0),
+           seasonal=list(order=c(2,1,0), period=12)))
+print_t_ratio(m3)
+```
+bad AIC compared with m1 and m2, thus we dont consider this model.
+
+## 2. Residual analisis
+### 1) Variance analisis
+
+```{r}
+resi = resid(m2);
+plot(resi);
+abline(h=0);
+abline(h=c(-3*sd(resi),3*sd(resi)),lty=3,col=4)
+```
+
+
+```{r}
+scatter.smooth(sqrt(abs(resi)), lpars=list(col=2))
+```
+
+### 2) Normality
+
+```{r}
+qqnorm(resi); qqline(resi,col=2,lwd=2)
+```
+
+
+```{r}
+hist(resi,breaks=20, freq=FALSE)
+curve(dnorm(x, mean=mean(resi),sd=sd(resi)), col=2, add=T)
+```
+
+```{r}
+shapiro.test(resi)
+```
+
+### 3) Residual independence
+```{r}
+par(mfrow=c(1,2))
+acf(resi,ylim=c(-1,1),lag.max=72,lwd=2,col=c(2,rep(1,11)))
+pacf(resi,ylim=c(-1,1),lag.max=72,lwd=2,col=c(rep(1,11),2))
+par(mfrow=c(1,1))
+```
+
+```{r}
+tsdiag(m1,gof.lag=72)
+```
+### 4) AR and MA polynomials
+
+```{r}
+Mod(polyroot(c(1,-m1$model$phi)))
+min(Mod(polyroot(c(1,-m1$model$phi))))
+```
+
+Totes les arrels del polinomi característic de la part AR tenen modulo superior a 1, per la qual cosa el model és causal
+
+```{r}
+Mod(polyroot(c(1,m1$model$theta)))
+min(Mod(polyroot(c(1,m1$model$theta))))
+```
+otes les arrels del polinomi característic de la part MA. tenen modulo superior a 1, per la qual cosa el model és invertible
+
+```{r,warning=FALSE}
+plot(m1)
+```
+
+
+

@@ -1,0 +1,1012 @@
+---
+title: "Exportations"
+author: "Carlos Arbonés & Joel Solé"
+date: "2023-04-12"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+# Exportacions Totals Espanya
+
+```{r, warning=FALSE}
+library(forecast)
+library(ggplot2)
+library(plotly)
+library(TSstudio)
+library(ggthemes)
+library(magrittr)
+library(ggseas)
+library(zoo)
+library(ggpubr)
+library(ggsci)
+```
+
+```{r}
+source("plot.r")
+```
+
+```{r}
+ser <- ts(read.table("export.dat") / 1000, start = c(1999, 1), freq = 12)
+plot_ser(ser, "Bilions of Euros")
+```
+
+
+```{r}
+decompose_ser(ser)
+```
+
+
+### Descripció de la sèrie
+
+Podem observar que el període que comprèn des de 1999 (inici de la sèrie) fins al 2008 existeix una tendència clarament lineal creixent. Al 2008 es produeix una baixada en les exportacions espanyoles degut a la crisis. A partir d'aquest fenomen es produeix un altre creixement lineal similar al que hi havia abans de la crisi. És clara l'existència de pics negatius als mesos d'estiu, relacionats a una baixada de les exportacions degut a les vacances. 
+
+## Convertim la sèrie a estacionària
+
+### Variància Constant
+
+```{r}
+m <- apply(matrix(ser, nrow = 12, byrow = FALSE), 2, mean)
+v <- apply(matrix(ser, nrow = 12, byrow = FALSE), 2, var)
+bivariate_plot(m,v,"Mean", "Variance")
+```
+
+
+```{r}
+boxplot_ser(ser, "Year", "Bilions of euros")
+```
+
+La variància de la sèrie sembla augmentar a mesura que augmenten els valors, per tant no hi ha variància constant. Al boxplot, que és una mesura més robusta davant de outliers, sembla que els valors més alts de la sèrie tenen major variància, tot i que també podem observar valors més petits amb variància més alta. Tot i això, és clar que la variància no és constant. Per aconseguir la homocedasticitat aplicarem la transformació Box-Cox als valors de la sèrie. Utilitzarem la funció  $BoxCox.lambda$ de R, que troba la millor $\lambda$ en un rang  $\lambda \in [-1,2]$. Si la millor $\lambda$ és igual a 0, la transformació és $log$ de la sèrie. 
+
+```{r}
+(lambda <- BoxCox.lambda(ser, lower = -1, upper = 2))
+```
+
+Observem que la millor $\lambda$ és $0.3948636$, per tant la transformació que apliquem a la sèrie és: 
+$$X_t = \left( \frac{X_t^\lambda - 1}{\lambda}   \right) $$
+
+```{r}
+trser <- (ser^lambda - 1) / lambda
+```
+
+Tornem a mirar la variància, aquest cop de la sèrie transformada $trser$. 
+
+```{r}
+m <- apply(matrix(trser, nrow = 12, byrow = FALSE), 2, mean)
+v <- apply(matrix(trser, nrow = 12, byrow = FALSE), 2, var)
+bivariate_plot(m,v, "Mean", "Variance")
+```
+
+
+```{r}
+boxplot_ser(trser, "Year", "Value")
+```
+
+
+La variància sembla que no segueix cap patró, la hipòtesi d'homocedasticitat és molt més creïble que abans. Per tant ens quedem amb la transformació.
+
+### Estacionalitat
+
+El següent pas és eliminar el patró estacional de la sèrie. 
+
+```{r}
+monthplot_ser(trser)
+```
+
+```{r}
+seasonal_ser(trser)
+```
+
+
+Observem que la mitjana de cada mes no és constant i que al més d'agost hi ha una baixada important. Per tal d'aconseguir eliminar el patró estacional apliquem una diferenciació estacional a la sèrie, que consisteix a cada observació restar-li la del període anterior, això és: 
+
+$\text{Diferenciació estacional}(X_t) = X_t-X_{t-s} = (1-B^s)X_t$
+
+```{r}
+d12trser <- diff(trser, lag = 12)
+plot_ser(d12trser, ylab = "", red_line_at_0 = TRUE)
+```
+
+```{r}
+monthplot_ser(d12trser)
+```
+
+
+```{r}
+seasonal_ser(d12trser)
+```
+
+
+El patró estacional ha quedat eliminar, la mitjana mensual és constant i no existeix un patró clar en quant a les exportacions per cada mes. 
+
+### Mitjana Constant
+
+Finalment, cal aplicar a la sèrie diferenciacions regulars fins que aconseguim mitjana constant. Això és: 
+
+$\text{Diferenciació regular}(X_t) = X_t-X_{t-1} = (1-B)X_t $
+
+```{r}
+d1d12trser <- diff(d12trser)
+plot_ser(d1d12trser, ylab = "", red_line_at_0 = TRUE)
+```
+
+Sembla que hi ha mitjana constant, tot i així anem a comprovar que amb una diferenciació més la variància de la sèrie augmenta i que per tant estaríem sobre diferenciant. 
+
+```{r}
+var(d12trser)
+var(d1d12trser)
+var(diff(d1d12trser))
+```
+
+Efectivament, la variància augmenta amb una nova diferenciació regular, per tant només cal aplicar-ne una. 
+
+### Sèrie estacionària
+
+La sèrie estacionària que ens queda després d'haver aplicar diverses operacions i transformacions a la sèrie original és la següent: 
+
+$$W_t = (1-B)(1-B^{12})\left(\frac{X_t^{\lambda}-1}{\lambda}\right)  $$
+
+## Identificació
+
+Fem plot del ACF i PACF de $W_t$ per tal identificar els models. 
+
+
+```{r}
+plot_acf_pacf(d1d12trser, 84, "figures/Identification/wt_acfs.pdf")
+```
+
+### Residus regulars
+
+Els retards infinits els identifiquem al ACF on s'observen molts retards significatius lluny del origen. Per tant es tractarà d'un $AR(2)$ ja que observem clarament 2 retards significatius i la resta els considerem nuls ja que es troben dins les bandes de confiança. 
+
+### Residus estacionals
+
+En aquest cas tenim diferents interpretacions. Per una banda és clar que al PACF els retards estacionals segueixen pautes de decreixement exponencial, propi d'un model $MA(q)$. En aquest cas, identifiquem un $MA(6)$, ja que observem un 6è retard estacional significatiu que volem capturar, i per tant assumirem que després d'aquest la resta de retards son nuls. 
+
+Per altra banda, es veu més clar un model amb menys paràmetres on els infinits retards es trobin en el ACF i els retards finits en el ACF. En aquest cas identifiquem un $AR(4)$ on considerem que a partir del 4t retard tots son nuls, ja que es troben dins les bandes de confiança.
+
+Finalment, identifiquem pautes de decreixement tant el ACF com en el ACF, identificant un model amb menys paràmetres, un $ARMA(1, 1)$
+
+### Models identificats
+
+Els models que queden identificats son els següents: 
+
+$$m1 = ARIMA(2, 1, 0)(4,1,0)_{12}$$
+$$m2 = ARIMA(2, 1, 0)(0,1,6)_{12}$$
+$$m3 = ARIMA(2, 1, 0)(1,1,1)_{12}$$
+
+## Estimació
+
+En aquest apartat estimarem els paràmetres dels dos primers models i mirarem quins son significatius. El primer que farem es ajustar el model corresponent amb la sèrie $W_t$ per estimar la mitjana. Si veiem que la mitjana no és significativa treballarem amb $trser$ per tal que ens sigui més fàcil a l'hora de predir obtenir els valors originals de la sèrie. En el cas que observem que algun paràmetre del model no és significatiu ($|t| < 2$) el traurem per simplificar el model. 
+
+### ARIMA(2, 1, 0)(4,1,0)
+
+```{r}
+(m1 <- arima(d1d12trser, order = c(2, 0, 0), seasonal = list(order = c(4, 0, 0), period = 12)))
+```
+
+La mitjana no és significativa, treballarem amb $trser$.
+
+```{r}
+(m1 <- arima(trser, order = c(2, 1, 0), seasonal = list(order = c(4, 1, 0), period = 12)))
+print_t_ratio(m1)
+```
+
+Tots els paràmetres son significatius, el model que queda és el següent: 
+
+$$ (1 + 0.076B + 0.38B^2)(1 + 0.5954B^{12} + 0.6411B^{24} + 0.4560B^{36} + 0.4251B^{48})W_t = Z_t   $$
+
+### ARIMA(2, 1, 0)(0,1,6)
+
+```{r}
+(m2 <- arima(d1d12trser, order = c(2, 0, 0), seasonal = list(order = c(0, 0, 6), period = 12)))
+```
+
+La mitjana no és significativa, treballarem amb $trser$.
+
+```{r}
+(m2 <- arima(trser, order = c(2, 1, 0), seasonal = list(order = c(0, 1, 6), period = 12)))
+print_t_ratio(m2)
+```
+
+Hi han 3 paràmetres no significatius, traurem primer el que té un T-rati més baix, que en aquest cas és $sma5$.
+
+```{r, warning=FALSE}
+(m2 <- arima(trser, order = c(2, 1, 0), seasonal = list(order = c(0, 1, 6), period = 12), fixed = c(NA, NA, NA, NA, NA, NA, 0, NA)))
+print_t_ratio(m2)
+```
+
+Observem que ara tots els paràmetres son significatius, el model que queda és el següent: 
+
+$$  (1 + 0.8024B + 0.4485B^2)W_t = (1 - 0.9014B^{12} - 0.2779B^{24} + 0.2242^{36} + 0.1711^{48} - 0.2405B^{72})Z_t   $$
+
+## Validació
+
+A continuació farem la validació dels dos models estimats ($m1$ i $m2$).
+
+### Anàlisi dels Residus
+
+Per cada un dels models realitzarem l'estudi dels residus complet i verificarem que compleixin les hipòtesis de variància constant, normalitat, i la més crítica de totes, independència. En el cas que no compleixin aquesta última hauriem de re identificar el model per intentar capturar millor la estructura d'autocorrelació present a les dades. 
+
+#### ARIMA(2, 1, 0)(4, 1, 0)
+
+
+
+```{r}
+resi <- resid(m1)
+```
+
+##### Variància
+
+```{r}
+plot_residuals(resi)
+```
+
+La variància és bastant constant, amb un petit augment al final de la sèrie. S'observa un outlier corresponent a l'any 2008. Observem que hi han alguns residus molt propers a zero al principi de la sèrie, això pot ser degut a les diferenciacions aplicades a la sèrie ja que es tracta de les 12 primeres observacions, que no tindrem en compte a l'hora d'analitzar els residus. 
+
+
+```{r}
+resi <- resi[13:length(resi)]
+bivariate_plot(1:length(resi), sqrt(abs(resi)), "", "")
+```
+
+La línia vermella segueix una direcció casi horitzontal, cosa que indica que la variància és constant.
+
+##### Normalitat
+
+```{r}
+res_qqplot(resi)
+```
+
+Els residus s'ajusten molt bé sobre la línia, el que ens dona indicis que els residus podrien estar normalment distribuits. Observem alguns outliers al principi i al final rels residus, però es tracta de punts aïllats. 
+
+```{r}
+res_histogram(resi)
+```
+
+El histograma dels residus no sembla distribuït normalment, tot i així, el histograma no és una bona manera de verificar la normalitat. 
+
+```{r}
+shapiro.test(resi)
+```
+
+Un $p-valor = 0.04701$ suggereix que no hi ha evidència suficient com per afirmar que els residus estiguin normalment distribuits.
+
+##### Independència
+
+Fem el ACF i PACF dels residus per comprovar si tenen correlació entre ells. 
+
+```{r}
+plot_acf_pacf(resi, 72)
+```
+
+Observem que tots els retards no son significatius ja que es troben dins dels intervals de confiança, a més, els retards més propers a l'origen son molt propers al 0. Això ens indica que no queda estructura d'autocorrelació als residus i que per tant aquests son independents. Tot i això farem el $\textit{Jung-Box Test}$ on la hipòtesi nul·la és la següent: 
+
+
+$$H_0 \text{ : } \rho_z(1) = \rho_z(2) = \cdots \cdots = \rho_z(k)$$
+```{r}
+ljung_box_plot(m1$resi)
+```
+
+Observem que els $p-valors$ es troben per sobre de $0.05$ (línia blava) el que indica que no hi han evidències suficients als residus per rebutjar la hipòtesi nul·la de aletorietat dels residus i per tant la hipòtesi d'independència queda validada. 
+
+### ARiMA(2, 1, 0)(0, 1, 6)
+
+```{r}
+resi <- resid(m2)
+```
+
+##### Variance
+
+```{r}
+plot_residuals(resi)
+```
+
+La variància sembla constant, observem un outlier al 2008. 
+
+```{r}
+resi <- resi[13:length(resi)]
+bivariate_plot(1:length(resi), sqrt(abs(resi)), "", "")
+```
+
+La línia vermella (ajust suau) és gairebé horitzontal, la la hipòtesi de homocedasticitat queda verificada. 
+
+##### Normalitat
+
+```{r}
+res_qqplot(resi)
+```
+
+Els residus s'ajusten a línia, el que suggereix que segueixen una distribució normal. Apareixen alguns outliers al principi dels residus. 
+
+```{r}
+res_histogram(resi)
+```
+
+El histograma dels residus no sembla seguir una distribució Normal. 
+
+```{r}
+shapiro.test(resi)
+```
+
+Un $p-valor=0.006186$ és molt baix, el que ens indica que no hi ha prou evidència als residus com per afirmar que son normals.
+
+##### Independència
+
+Fem el ACF i PACF dels residus per comprobar si tenen correlació.
+
+```{r}
+plot_acf_pacf(resi, 72)
+```
+
+Els retards més propers al origen son no significatius. Hi ha algun retard significant però molt lluny del origen, el que sembla indicar que els residus son independents. Tot i així ho comprovarem amb el $\textit{LJung-Box Text}$.
+
+```{r}
+ljung_box_plot(m2$residuals)
+```
+
+Com podem observar els $\textit{p-valors}$ es situen per sobre de la línia blava, menys en algun cas concret però bastant lluny del origen. Per tant la hipòtesi de independència queda validada.  
+
+### Invertibilitat i Causalitat
+
+A continuació comprovarem si els models son invertibles i/o causals. Aquestes propietats son importants ja que ens permetran convertir els models en $AR(\infty)$ i $MA(\infty) $. Si no les compleixen, els pesos $\pi$ i $psi$ no tendeixen a zero i no podrem truncar las expressions, el que farà que no puguem predir ja que es dona més importància les observacions més remotes. 
+
+Perquè el model sigui invertible s'ha de complir que $\sum_{i=0}^{\infty}\pi^2 < \infty $, el que és el mateix que dir que el mòdul de totes les arrels del polinomi $\theta(B)$ siguin majors que 1. 
+
+Perquè el model sigui causal s'ha de complir que $\sum_{i=0}^{\infty}\psi^2 < \infty $, el que és el mateix que dir que el mòdul de totes les arrels del polinomi $\phi(B)$ siguin majors que 1. 
+
+
+#### ARIMA(2, 1, 0)(4, 1, 0)
+
+Tenim el model següent: 
+
+$$ (1 + 0.076B + 0.38B^2)(1 + 0.5954B^{12} + 0.6411B^{24} + 0.4560B^{36} + 0.4251B^{48})W_t = Z_t   $$
+
+on 
+
+  $$ \phi(B) = (1 + 0.076B + 0.38B^2)(1 + 0.5954B^{12} + 0.6411B^{24} + 0.4560B^{36} + 0.4251B^{48})  $$
+  $$ \theta(B) = 1  $$
+##### Causalitat  
+  
+Calculem el mòdul de les arrels del polinomi $\phi(B)$ i mirem quina arrel té el mòdul més petit, si aquest és més petit o igual que 1 el model no serà causal. 
+
+```{r}
+Mod(polyroot(c(1, -m1$model$phi)))
+min(Mod(polyroot(c(1, -m1$model$phi))))
+```
+El mòdul més petit és igual a $1.0154 > 1$ per tant el model és causal. 
+
+##### Invertibilitat
+
+El polinomi $ \theta(B) = 1 $ per tant el model és també invertible. 
+
+
+```{r}
+plot_ARMA_roots(m1)
+```
+
+##### AR(inf) i MA(inf)
+
+Calcularem els pesos $\pi$ i $\psi$ de 36 retards. 
+
+```{r}
+## Pesos Pi (AR infinit)
+pis <- -ARMAtoMA(ar = -m1$model$theta, ma = -m1$model$phi, lag.max = 200)
+plot_weights(pis, 200)
+```
+
+```{r}
+## Pesos Psi (MA infinit)
+psis <- ARMAtoMA(ar = m1$model$phi, ma = m1$model$theta, lag.max = 200)
+plot_weights(psis, 200)
+```
+
+#### ARiMA(2, 1, 0)(0, 1, 6)
+
+Tenim el model següent: 
+
+$$  (1 + 0.8024B + 0.4485B^2)W_t = (1 - 0.9014B^{12} - 0.2779B^{24} + 0.2242^{36} + 0.1711^{48} - 0.2405B^{72})Z_t   $$
+
+on 
+
+$$ \phi(B) = (1 + 0.8024B + 0.4485B^2)$$
+
+$$ \theta(B) = (1 - 0.9014B^{12} - 0.2779B^{24} + 0.2242^{36} + 0.1711^{48} - 0.2405B^{72})$$
+
+##### Causalitat
+
+Calculem el mòdul de les arrels del polinomi $\phi(B)$ i mirem quina arrel té el mòdul més petit, si aquest és més petit o igual que 1 el model no serà causal. 
+
+```{r}
+Mod(polyroot(c(1, -m2$model$phi)))
+min(Mod(polyroot(c(1, -m2$model$phi))))
+```
+
+El model és causal ja que el mòdul de l'arrel més petit és $1.4932 > 1$. 
+
+##### Invertibilitat
+
+Calculem el mòdul de les arrels del polinomi $\theta(B)$ i mirem quina arrel té el mòdul més petit, si aquest és més petit o igual que 1 el model no serà invertible. 
+
+```{r}
+Mod(polyroot(c(1, m2$model$theta)))
+min(Mod(polyroot(c(1, m2$model$theta))))
+```
+
+Veiem que el mòdul més petit és igual a $0.9986 < 1$, per tant el model no és invertible, els pesos $\pi$ no tendeixen a 0. 
+
+```{r}
+plot_ARMA_roots(m2)
+```
+
+##### AR(inf) i MA(inf)
+
+Calcularem els pesos $\pi$ i $\psi$ de 36 retards. 
+
+```{r}
+## Pesos Pi (AR infinit)
+pis <- -ARMAtoMA(ar = -m2$model$theta, ma = -m2$model$phi, lag.max = 200)
+plot_weights(pis, 200)
+```
+
+```{r}
+## Pesos Psi (MA infinit)
+psis <- ARMAtoMA(ar = m2$model$phi, ma = m2$model$theta, lag.max = 200)
+plot_weights(psis, 200)
+```
+## Mesures d'adequació a les dades
+
+Comparem el AIC i BIC dels dos models
+
+### AIC
+
+
+```{r}
+AIC(m1)
+AIC(m2)
+```
+
+L'AIC és molt similar per als dos models, encara que el del segon model és millor. Sembla que s'ajusten a les dades de manera semblant.
+
+### BIC
+
+```{r}
+BIC(m1)
+BIC(m2)
+```
+
+Era d'esperar que el primer model tingués millor BIC que el segon, ja que el BIC selecciona models més parsimoniosos penalitzant més el nombre de paràmetres, i en aquest cas el segon model té 1 paràmetre més. Tot i això el BIC és també semblant. 
+
+
+## Estabilitat del model 
+
+En aquest apartat comprovarem si els models son estables. Un model és estable si manté la seva capacitat predictiva davant diferents conjunts de dades, és a dir, si és pràcticament el mateix amb o sense les últimes $x$ observacions. Estimarem els dos models sense les últimes 12 observacions i els compararem amb els respectius models originals. Conclourem que el model és estable si els paràmetres tenen el mateix signe, magnitud i significança. 
+
+Primer de tot seleccionarem una finestra de $trser$ sense les últimes 12 observacions
+
+```{r}
+year <- end(trser)[1] - 1 # end(trser) = c(any, mes)
+trser_12 <- window(trser, end = c(year, 12))
+```
+
+
+### ARIMA(2, 1, 0)(4, 1, 0)
+
+```{r}
+m1_12 <- arima(trser_12, order = c(2, 1, 0), seasonal = list(order = c(4, 1, 0), period = 12))
+stability(m1, m1_12)
+```
+
+El model és estable, observem que la diferència entre coeficients és molt petita i que tenen la mateixa magnitud. També mantenen la significança.
+
+### ARIMA(2, 1, 0)(0, 1, 6)
+
+```{r, warning=FALSE}
+m2_12 <- arima(trser_12, order = c(2, 1, 0), seasonal = list(order = c(0, 1, 6), period = 12), fixed = c(NA, NA, NA, NA, NA, NA, 0, NA))
+stability(m2, m2_12)
+```
+
+El model també és estable per les mateixes raons. 
+
+## Capacitat de previsió
+
+Per computar els intervals de confiança de les prediccions agafarem una significació $\alpha = 0.05$, amb un $95\%$ de confiança. Per tant tenim que $Z_{1-\alpha} = 1.96$. Ens queda: 
+
+$$ IC_{95\%}(X_{t+h}) = \tilde{X}_{t+h|t} \text{} \pm 1.96*\sqrt(Var(\tilde{X}_{t+h|t}))   $$
+
+Per tal d'obtenir els valors originals de la sèrie després de les prediccions hem de fer l'operació inversa al $\textit{Box_Cox}$, ens queda: 
+
+$$ X_t = (\lambda\cdot X + 1)^{\frac{1}{\lambda}} $$
+
+També necessitem les últimes 12 observacions per calcular la capacitat de predicció.
+
+```{r}
+year <- end(trser)[1]
+(obs <- window(ser, start = c(year, 1)))
+```
+
+### ARIMA(2, 1, 0)(4, 1, 0)
+
+```{r}
+pre <- predict(m1_12, n.ahead = 12)
+
+tl <- (lambda * (pre$pred - 1.96 * pre$se) + 1)^(1 / lambda) # límit inferior
+tu <- (lambda * (pre$pred + 1.96 * pre$se) + 1)^(1 / lambda) # límit superior
+pr <- (lambda * (pre$pred) + 1)^(1 / lambda) # prediccions puntuals
+
+
+plot_predicted(ser, pr, tl, tu, 2013, 2019)
+```
+
+```{r}
+(RMSE1 <- sqrt(mean((obs - pr)^2)))
+(MAE1 <- mean(abs(obs - pr)))
+(RMSPE1 <- sqrt(mean(((obs - pr) / obs)^2)))
+(MAPE1 <- mean(abs(obs - pr) / obs))
+```
+
+Observem que tenim un error percentual al voltant del $3-4\%$ el que vol dir el model ajusta molt bé les dades i que les prediccions puntuals no s'allunyen gaire dels valors reals de la sèrie. Per altra banda tenim un error mitjà d'aproximament $0.88$ milers de milions de euros.  
+
+```{r}
+(CI1 <- mean(tu - tl))
+```
+
+L'interval de confiança per les prediccions puntuals té un valor mitjà de $5.804$ milers de milions d'euros. 
+
+### ARIMA(2, 1, 0)(0, 1, 6)
+
+```{r, warning=FALSE}
+pre <- predict(m2_12, n.ahead = 12)
+
+tl <- (lambda * (pre$pred - 1.96 * pre$se) + 1)^(1 / lambda) # límit inferior
+tu <- (lambda * (pre$pred + 1.96 * pre$se) + 1)^(1 / lambda) # límit superior
+pr <- (lambda * (pre$pred) + 1)^(1 / lambda) # prediccions puntuals
+
+
+plot_predicted(ser, pr, tl, tu, 2013, 2019)
+```
+
+```{r}
+(RMSE2 <- sqrt(mean((obs - pr)^2)))
+(MAE2 <- mean(abs(obs - pr)))
+(RMSPE2 <- sqrt(mean(((obs - pr) / obs)^2)))
+(MAPE2 <- mean(abs(obs - pr) / obs))
+```
+
+Observem que tenim un error percentual al voltant del $3-4\%$ el que vol dir el model ajusta molt bé les dades i que les prediccions puntuals no s'allunyen gaire dels valors reals de la sèrie. Per altra banda tenim un error mitjà d'aproximament $0.93$ milers de milions de euros. 
+
+```{r}
+(CI2 <- mean(tu - tl))
+```
+
+L'interval de confiança per les prediccions puntuals té un valor mitjà de $5.525$ milers de milions d'euros. 
+
+### Millor model per fer prediccions
+
+Per decidir quin és el millor model per realitzar prediccions compararem les mesures de capacitat de predicció obtingudes anteriorment. 
+
+```{r}
+result_table <- data.frame(
+  Model = c("Model 1", "Model 2"),
+  RMSE = c(RMSE1, RMSE2),
+  MAE = c(MAE1, MAE2),
+  RMSPE = c(RMSPE1, RMSPE2),
+  MAPE = c(MAPE1, MAPE2),
+  CI = c(CI1, CI2)
+)
+
+print(result_table)
+```
+
+Podem observar que el primer model té un error menor en totes les mesures, tot i que té un interval de confiança més gran. Per tant escollirem el primer model per fer les nostres prediccions, que a més, és invertible. 
+
+## Previsions
+
+Calculem les previsions a llarg termini per els 12 mesos posteriors a la última observació.
+
+```{r}
+pre <- predict(m1, n.ahead = 12)
+
+tl <- (lambda * (pre$pred - 1.96 * pre$se) + 1)^(1 / lambda)
+tu <- (lambda * (pre$pred + 1.96 * pre$se) + 1)^(1 / lambda)
+pr <- (lambda * (pre$pred) + 1)^(1 / lambda)
+
+plot_forecast(ser, pr, tl, tu, 2016, 2020)
+```
+
+## Efectes de calendari 
+
+```{r, warning=FALSE}
+source("CalendarEffects.r")
+```
+
+A continuació analitzarem els efectes de calendari (Setmana Santa i Dies Laborables) sobre la sèrie i veurem si son significatius.
+
+Depèn de quin mes caigui la Setmana Santa pot afectar a les prediccions. Si un any cau a març segurament les exportacions durant aquell mes baixaran i es farà notar a la sèrie. Si l'any següent cau a l'abril, la predicció per al mes de març serà més baixa del que hauria de ser. Per tal de controlar aquests efectes repartirem l'efecte de la Setmana Santa (sencera) entre els mesos de març i abril.
+
+Pel que fa a l'efecte dels dies laborables, mantindrem una proporció de dies laborables respecte dies festius de 5/2. D'aquesta manera si per exemple un mes no compleix aquest rati, afegirem/traurem dies laborables depenent de si té menys/més del compte. 
+
+La sèrie que per tant quedarà serà la següent: 
+
+$$ X_t^*  = X_t - w_{TD}TD_t - w_{Ea}Ea_t $$
+
+```{r}
+inici <- c(1999, 1, length(ser))
+vEa <- Weaster(inici)
+vTD <- Wtrad(inici)
+```
+
+$\textit{vEa}$ i $\textit{vTD}$ contenen $TD_t$ i $Ea_t$ respectivament. Ara ajustarem tots els models possibles amb i sense els efectes de calendari, per comprovar si aquests son significatius o no.  
+
+```{r}
+(mod1 <- arima(trser, order = c(2, 1, 0), seasonal = list(order = c(4, 1, 0), period = 12)))
+```
+
+```{r}
+(modEa <- arima(trser, order = c(2, 1, 0), seasonal = list(order = c(4, 1, 0), period = 12), xreg = data.frame(vEa)))
+```
+
+```{r}
+(modTD <- arima(trser, order = c(2, 1, 0), seasonal = list(order = c(4, 1, 0), period = 12), xreg = data.frame(vTD)))
+```
+
+```{r}
+(modEC <- arima(trser, order = c(2, 1, 0), seasonal = list(order = c(4, 1, 0), period = 12), xreg = data.frame(vEa, vTD)))
+```
+
+Podem veure que $w_{Ea} = -0.2075$ el que vol dir que el fet de que la Setmana Santa caigui sencera a un mes fa que es redueix les exportacions. En canvi,$w_{TD} = 0.0285$ que és positiu, i que per tant indica que el fet d'augmentar els dies laborables en un mes afecta positivament a les exportacions, la qual cosa té sentit.
+
+```{r}
+AIC(mod1)
+AIC(modEa)
+AIC(modTD)
+AIC(modEC)
+```
+
+A part de que observem que son significatius, amb els efectes de calendar l'AIC millora moltíssim. Per tant ens quedem amb l'últim model $modEC$.
+
+### Anàlisi d'intervencions
+
+Anem a mesurar l'efecte de l'acord d'associació Econòmica entre la Unió Europea i Amèrica Central, a l'agost de 2013, que va fa que sigui més fàcil i econòmic per als comerciants de la UE importar i exportar a Amèrica Central.
+
+
+```{r}
+vAcord <- ts(rep(0, length(ser)), start = 1999, freq = 12)
+window(vAcord, start = c(2013, 8)) <- 1
+```
+
+```{r}
+(modECIA <- arima(trser, order = c(2, 1, 0), seasonal = list(order = c(4, 1, 0), period = 12), xreg = data.frame(vEa, vTD, vAcord)))
+```
+
+Veiem que no és significatiu i que no sembla que tingués gaire efecte en les exportacions espanyoles. 
+
+
+## Box-Jenkins a la sèrie amb EC
+
+La sèrie que ens queda si tenim en compte els efectes de calendari és la següent
+
+```{r}
+trserEC <- trser - coef(modEC)["vEa"] * vEa - coef(modEC)["vTD"] * vTD
+```
+
+### Transformar la sèrie a estacionària
+
+Apliquem les transformacions per tal de convertir la sèrie en estacionària. 
+
+```{r}
+d1d12trserEC <- diff(diff(trserEC, 12))
+```
+
+### Identificació
+
+Mirem l'ACF i PACF per identificar models. 
+
+```{r}
+plot_acf_pacf(d1d12trserEC, 60)
+```
+
+Per la part regular el ACF segueix un patró de decreixement que indica que hi han retards infinits, com al PACF només hi han 2 retards significatius identifiquem un $AR(2)$. 
+
+Per la part estacional, observem que els retards estacional al PACF segueixen un clar decreixement exponencial, el que indica que els retards infinits es troben al PACF. Veiem que al ACF només hi ha un retard significatiu, ja que la resta els considerem nuls degut a que es troben dins de les bandes de confiança. Per tant, identifiquem un $MA(1)$.
+
+El model que ens queda és el següent:
+
+  $$mEC = ARIMA(2,1,0)(0,1,1)$$
+
+### Estimació
+
+Anem a estimar ara els paràmetres del model. 
+
+```{r}
+(mEC <- arima(trser, order = c(2, 1, 0), seasonal = list(order = c(0, 1, 1), period = 12), xreg = data.frame(vEa, vTD)))
+```
+
+### Validació
+
+A continuació anem a fer la validació del model. 
+
+```{r}
+resi <- resid(mEC)
+plot_residuals(resi)
+```
+
+```{r}
+resi <- resi[13:length(resi)]
+bivariate_plot(1:length(resi), sqrt(abs(resi)), "", "")
+```
+
+La variància és constant. 
+
+```{r}
+res_qqplot(resi)
+```
+
+```{r}
+res_histogram(resi)
+```
+
+El QQ-plot i el histograma suggereix que els residus segueixen una distribució normal. 
+
+```{r}
+shapiro.test(resi)
+```
+
+Rebutjem la hipòtesi de normalitat als residus.  
+
+```{r}
+plot_acf_pacf(resi, 72)
+```
+
+```{r}
+ljung_box_plot(m1$residuals)
+```
+
+Els residus son independents, no queda estructura d'autocorrelació.
+
+```{r}
+min(Mod(polyroot(c(1, -mEC$model$phi))))
+min(Mod(polyroot(c(1, mEC$model$theta))))
+```
+
+El model és invertible i causal. 
+
+```{r}
+plot_ARMA_roots(mEC)
+```
+
+```{r}
+AIC(mEC)
+BIC(mEC)
+```
+
+```{r}
+ultim <- c(2017, 12)
+
+vEa2 <- window(vEa, end = ultim)
+vTD2 <- window(vTD, end = ultim)
+trser_12 <- window(trser, end = ultim)
+
+(mEC_12 <- arima(trser_12, order = c(2, 1, 0), seasonal = list(order = c(0, 1, 1), period = 12), xreg = data.frame(vEa2, vTD2)))
+```
+
+
+```{r}
+vEa2 <- window(vEa, start = ultim + c(0, 1))
+vTD2 <- window(vTD, start = ultim + c(0, 1))
+pre <- predict(mEC_12, n.ahead = 12, newxreg = data.frame(vEa2, vTD2))
+
+tl <- (lambda * (pre$pred - 1.96 * pre$se) + 1)^(1 / lambda) # límit inferior
+tu <- (lambda * (pre$pred + 1.96 * pre$se) + 1)^(1 / lambda) # límit superior
+pr <- (lambda * (pre$pred) + 1)^(1 / lambda) # prediccions puntuals
+
+plot_predicted(ser, pr, tl, tu, 2016, 2019)
+```
+
+```{r}
+(RMSE3 <- sqrt(mean((obs - pr)^2)))
+(MAE3 <- mean(abs(obs - pr)))
+(RMSPE3 <- sqrt(mean(((obs - pr) / obs)^2)))
+(MAPE3 <- mean(abs(obs - pr) / obs))
+```
+
+```{r}
+(CI3 <- mean(tu - tl))
+```
+
+
+```{r}
+result_table <- data.frame(
+  Model = c("Model 1", "Model 2", "Model EC"),
+  RMSE = c(RMSE1, RMSE2, RMSE3),
+  MAE = c(MAE1, MAE2, MAE3),
+  RMSPE = c(RMSPE1, RMSPE2, RMSPE3),
+  MAPE = c(MAPE1, MAPE2, MAPE3),
+  CI = c(CI1, CI2, CI3)
+)
+print(result_table)
+```
+
+Observem que els errors son molt semblants als que ja teniem, però hem aconseguit reduir bastant els intervals de confiança de les prediccions. 
+
+## Tractament d'Outliers
+
+```{r}
+mod <- mEC
+```
+
+```{r}
+at <- outdetec(mod, dif = c(1, 12), crit = 2.8, LS = T)
+at$atip
+```
+
+```{r}
+atipics <- at$atip[order(at$atip[, 1]), ]
+meses <- c("Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic")
+data.frame(atipics,
+  Fecha = paste(meses[(atipics[, 1] - 1) %% 12 + 1], start(trser)[1] +
+    ((atipics[, 1] - 1) %/% 12))
+)
+```
+
+```{r}
+trser.lin=lineal(trser,at$atip)
+plot_ser_lin(ser, (lambda * trser.lin + 1)^(1 / lambda), "Billions of euros")
+```
+
+```{r}
+plot_ser(trser - trser.lin, "outlier effect")
+```
+
+```{r}
+trserEC.lin <- trser.lin -
+  coef(modEC)["vEa"] * vEa -
+  coef(modEC)["vTD"] * vTD
+```
+
+```{r}
+d1d12trserEC.lin <- diff(diff(trserEC.lin, 12))
+plot_ser(d1d12trserEC.lin, red_line_at_0 = TRUE)
+```
+
+```{r}
+plot_acf_pacf(d1d12trserEC.lin, 72)
+```
+
+```{r}
+(m1EClin <- arima(trser.lin, order = c(2, 1, 0), seasonal = list(order = c(0, 1, 1), period = 12), xreg = data.frame(vEa, vTD)))
+```
+
+```{r}
+(m2EClin <- arima(trser.lin, order = c(0, 1, 1), seasonal = list(order = c(0, 1, 1), period = 12), xreg = data.frame(vEa, vTD)))
+```
+
+```{r}
+resi <- resid(m1EClin)
+
+plot_residuals(resi)
+resi <- resi[13:length(resi)]
+bivariate_plot(1:length(resi), sqrt(abs(resi)), "","")
+
+res_qqplot(resi)
+res_histogram(resi)
+shapiro.test(resi)
+
+plot_acf_pacf(resi, 72)
+ljung_box_plot(resi)
+```
+
+
+```{r}
+resi <- resid(m2EClin)
+
+plot_residuals(resi)
+resi <- resi[13:length(resi)]
+bivariate_plot(1:length(resi), sqrt(abs(resi)), "","")
+
+res_qqplot(resi)
+res_histogram(resi)
+shapiro.test(resi)
+
+plot_acf_pacf(resi, 72)
+ljung_box_plot(resi)
+```
+
+```{r}
+(AIC <- AIC(m1EClin) + 2 * nrow(at$atip))
+(AIC <- AIC(m2EClin) + 2 * nrow(at$atip))
+(BIC <- BIC(m1EClin) + log(length(ser)**nrow(at$atip)))
+(BIC <- BIC(m2EClin) + log(length(ser)**nrow(at$atip)))
+```
+
+```{r}
+min(Mod(polyroot(c(1, -m1EClin$model$phi))))
+min(Mod(polyroot(c(1, m1EClin$model$theta))))
+min(Mod(polyroot(c(1, m2EClin$model$theta))))
+```
+
+```{r}
+ultim <- c(2017, 12)
+trser.lin_12 <- window(trser.lin, end = ultim)
+vEa2 <- window(vEa, end = ultim)
+vTD2 <- window(vTD, end = ultim)
+```
+
+```{r}
+(m1EClin_12 <- arima(trser.lin_12, order = c(2, 1, 0), seasonal = list(order = c(0, 1, 1), period = 12), xreg = data.frame(vEa2, vTD2)))
+(m2EClin_12 <- arima(trser.lin_12, order = c(0, 1, 1), seasonal = list(order = c(0, 1, 1), period = 12), xreg = data.frame(vEa2, vTD2)))
+
+vEa2 <- window(vEa, start = ultim + c(0, 1))
+vTD2 <- window(vTD, start = ultim + c(0, 1))
+
+pre1 <- predict(m1EClin_12, n.ahead = 12, newxreg = data.frame(vEa2, vTD2))
+pre2 <- predict(m2EClin_12, n.ahead = 12, newxreg = data.frame(vEa2, vTD2))
+
+wLS <- sum(at$atip[at$atip[, 2] == "LS", 3])
+```
+
+
+```{r}
+tl1 <- (lambda * (pre1$pred + wLS - 1.96 * pre1$se) + 1)^(1 / lambda) # límit inferior
+tu1 <- (lambda * (pre1$pred + wLS + 1.96 * pre1$se) + 1)^(1 / lambda) # límit superior
+pr1 <- (lambda * (pre1$pred + wLS) + 1)^(1 / lambda) # prediccions puntuals
+
+
+plot_predicted(ser, pr1, tl1, tu1, 2013, 2019)
+```
+
+
+```{r}
+tl2 <- (lambda * (pre2$pred + wLS - 1.96 * pre2$se) + 1)^(1 / lambda) # límit inferior
+tu2 <- (lambda * (pre2$pred + wLS + 1.96 * pre2$se) + 1)^(1 / lambda) # límit superior
+pr2 <- (lambda * (pre2$pred + wLS) + 1)^(1 / lambda) # prediccions puntuals
+
+
+plot_predicted(ser, pr2, tl2, tu2, 2013, 2019)
+```
+
+
+```{r}
+RMSE1 <- sqrt(mean((obs - pr1)^2))
+MAE1 <- mean(abs(obs - pr1))
+RMSPE1 <- sqrt(mean(((obs - pr1) / obs)^2))
+MAPE1 <- mean(abs(obs - pr1) / obs)
+
+RMSE2 <- sqrt(mean((obs - pr2)^2))
+MAE2 <- mean(abs(obs - pr2))
+RMSPE2 <- sqrt(mean(((obs - pr2) / obs)^2))
+MAPE2 <- mean(abs(obs - pr2) / obs)
+
+CI1 <- mean(tu1 - tl1)
+CI2 <- mean(tu2 - tl2)
+
+result_table <- data.frame(
+  Model = c("Model 1", "Model 2"),
+  RMSE = c(RMSE1, RMSE2),
+  MAE = c(MAE1, MAE2),
+  RMSPE = c(RMSPE1, RMSPE2),
+  MAPE = c(MAPE1, MAPE2),
+  CI = c(CI1, CI2)
+)
+print(result_table)
+```
+
+
+Ens quedarem amb el segon model per fer prediccions
+
+## Prediccions
+
+```{r}
+(m2EClin <- arima(trser.lin, order = c(0, 1, 1), seasonal = list(order = c(0, 1, 1), period = 12), xreg = data.frame(vEa, vTD)))
+```
+
+```{r}
+pre <- predict(m2EClin, n.ahead = 12, newxreg = data.frame(vEa2, vTD2))
+
+tl <- (lambda * (pre$pred + wLS - 1.96 * pre$se) + 1)^(1 / lambda) # límit inferior
+tu <- (lambda * (pre$pred + wLS + 1.96 * pre$se) + 1)^(1 / lambda) # límit superior
+pr <- (lambda * (pre$pred + wLS) + 1)^(1 / lambda) # prediccions puntuals
+
+plot_forecast(ser, pr, tl, tu, 2016, 2020)
+```
+
